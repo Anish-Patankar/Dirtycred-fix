@@ -120,6 +120,14 @@
 /* Slab deactivation flag */
 #define SLAB_DEACTIVATED	((slab_flags_t __force)0x10000000U)
 
+
+#ifdef CONFIG_SLUB
+# define SLAB_NO_MERGE  ((slab_flags_t __force)0x00001000U)
+#else
+# define SLAB_NO_MERGE  0
+#endif
+
+
 /*
  * ZERO_SIZE_PTR will be returned for zero sized kmalloc requests.
  *

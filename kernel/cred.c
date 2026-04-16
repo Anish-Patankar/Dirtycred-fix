@@ -30,7 +30,25 @@ do {									\
 } while (0)
 #endif
 
-static struct kmem_cache *cred_jar;
+static struct kmem_cache *cred_jar;  /* % for unprivileged*/
+static struct kmem_cache *cred_jar_privileged;  /* % for privileged*/
+
+/* % check if cred is privileged*/
+static bool cred_is_privileged(const struct cred *cred)
+{
+    /* privileged if: root uid/gid, or any effective/permitted caps set */
+    if (uid_eq(cred->uid,  GLOBAL_ROOT_UID) ||
+        uid_eq(cred->euid, GLOBAL_ROOT_UID) ||
+        gid_eq(cred->gid,  GLOBAL_ROOT_GID) ||
+        gid_eq(cred->egid, GLOBAL_ROOT_GID))
+        return true;
+
+    if (!cap_iszero(cred->cap_effective) ||
+        !cap_iszero(cred->cap_permitted))
+        return true;
+
+    return false;
+}
 
 /* init to 2 - one for init_task, one to ensure it is never freed */
 struct group_info init_groups = { .usage = ATOMIC_INIT(2) };
@@ -120,7 +138,8 @@ static void put_cred_rcu(struct rcu_head *rcu)
 		put_group_info(cred->group_info);
 	free_uid(cred->user);
 	put_user_ns(cred->user_ns);
-	kmem_cache_free(cred_jar, cred);
+	// kmem_cache_free(cred_jar, cred);
+	kmem_cache_free(cred->cache,cred); /* % free the appropriate cred jar (now separate for priv cred)*/
 }
 
 /**
@@ -218,6 +237,9 @@ struct cred *cred_alloc_blank(void)
 	if (!new)
 		return NULL;
 
+	/* % keep track of cred cache*/
+	new->cache = cred_jar;
+
 	atomic_set(&new->usage, 1);
 #ifdef CONFIG_DEBUG_CREDENTIALS
 	new->magic = CRED_MAGIC;
@@ -258,6 +280,10 @@ struct cred *prepare_creds(void)
 	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
 	if (!new)
 		return NULL;
+
+	/* % keep track of cred cache*/
+	if(new)
+		new->cache = cred_jar;
 
 	kdebug("prepare_creds() alloc %p", new);
 
@@ -439,6 +465,20 @@ int commit_creds(struct cred *new)
 	struct task_struct *task = current;
 	const struct cred *old = task->real_cred;
 
+	/* % migrate the privileged cred to privileged cache with the below if */
+	if(cred_is_privileged(new) && new->cache != cred_jar_privileged){
+		struct cred *migrated = kmem_cache_alloc(cred_jar_privileged, GFP_KERNEL);
+
+		if(!migrated){
+			/* fail safe: abort the commit, caller must handle */
+			return -ENOMEM;
+		}
+		memcpy(migrated,new,sizeof(struct cred));
+		migrated->cache = cred_jar_privileged;
+		kmem_cache_free(new->cache,new);
+		new=migrated;
+	}
+
 	kdebug("commit_creds(%p{%d,%d})", new,
 	       atomic_read(&new->usage),
 	       read_cred_subscribers(new));
@@ -534,6 +574,24 @@ void abort_creds(struct cred *new)
 }
 EXPORT_SYMBOL(abort_creds);
 
+
+/* % migrate cred on priv change*/
+static struct cred *cred_migrate_if_needed(struct cred *cred)
+{
+    if (cred_is_privileged(cred) && cred->cache != cred_jar_privileged) {
+        struct cred *migrated = kmem_cache_alloc(cred_jar_privileged,
+                                                  GFP_KERNEL);
+        if (!migrated)
+            return NULL;
+        memcpy(migrated, cred, sizeof(struct cred));
+        migrated->cache = cred_jar_privileged;
+        kmem_cache_free(cred->cache, cred);
+        return migrated;
+    }
+    return cred;
+}
+
+
 /**
  * override_creds - Override the current process's subjective credentials
  * @new: The credentials to be assigned
@@ -545,6 +603,7 @@ const struct cred *override_creds(const struct cred *new)
 {
 	const struct cred *old = current->cred;
 
+	
 	kdebug("override_creds(%p{%d,%d})", new,
 	       atomic_read(&new->usage),
 	       read_cred_subscribers(new));
@@ -660,7 +719,11 @@ void __init cred_init(void)
 {
 	/* allocate a slab in which we can store credentials */
 	cred_jar = kmem_cache_create("cred_jar", sizeof(struct cred), 0,
-			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT, NULL);
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT|SLAB_NO_MERGE, NULL);
+
+	/* % for privileged*/
+	cred_jar_privileged = kmem_cache_create("cred_jar_privileged", sizeof(struct cred), 0,
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT|SLAB_NO_MERGE, NULL);
 }
 
 /**
@@ -687,6 +750,10 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
 	if (!new)
 		return NULL;
+
+	/* % keep track of cred cache*/
+	new->cache = cred_jar;
+
 
 	kdebug("prepare_kernel_cred() alloc %p", new);
 
