@@ -16,6 +16,7 @@
 #include <linux/binfmts.h>
 #include <linux/cn_proc.h>
 #include <linux/uidgid.h>
+#include <linux/capability.h>
 
 #if 0
 #define kdebug(FMT, ...)						\
@@ -43,8 +44,8 @@ static bool cred_is_privileged(const struct cred *cred)
         gid_eq(cred->egid, GLOBAL_ROOT_GID))
         return true;
 
-    if (!cap_iszero(cred->cap_effective) ||
-        !cap_iszero(cred->cap_permitted))
+    if (!cap_issubset(cred->cap_effective,CAP_EMPTY_SET) ||
+        !cap_issubset(cred->cap_permitted,CAP_EMPTY_SET))
         return true;
 
     return false;
@@ -78,6 +79,7 @@ struct cred init_cred = {
 	.user			= INIT_USER,
 	.user_ns		= &init_user_ns,
 	.group_info		= &init_groups,
+	.cache = NULL,
 };
 
 static inline void set_cred_subscribers(struct cred *cred, int n)
@@ -139,7 +141,8 @@ static void put_cred_rcu(struct rcu_head *rcu)
 	free_uid(cred->user);
 	put_user_ns(cred->user_ns);
 	// kmem_cache_free(cred_jar, cred);
-	kmem_cache_free(cred->cache,cred); /* % free the appropriate cred jar (now separate for priv cred)*/
+	if (cred->cache)
+		kmem_cache_free(cred->cache,cred); /* % free the appropriate cred jar (now separate for priv cred)*/
 }
 
 /**
@@ -466,7 +469,7 @@ int commit_creds(struct cred *new)
 	const struct cred *old = task->real_cred;
 
 	/* % migrate the privileged cred to privileged cache with the below if */
-	if(cred_is_privileged(new) && new->cache != cred_jar_privileged){
+	if(cred_is_privileged(new) && new->cache != cred_jar_privileged && cred_jar_privileged!=NULL){
 		struct cred *migrated = kmem_cache_alloc(cred_jar_privileged, GFP_KERNEL);
 
 		if(!migrated){
@@ -475,7 +478,8 @@ int commit_creds(struct cred *new)
 		}
 		memcpy(migrated,new,sizeof(struct cred));
 		migrated->cache = cred_jar_privileged;
-		kmem_cache_free(new->cache,new);
+		if(new->cache)
+			kmem_cache_free(new->cache,new);
 		new=migrated;
 	}
 
@@ -585,7 +589,8 @@ static struct cred *cred_migrate_if_needed(struct cred *cred)
             return NULL;
         memcpy(migrated, cred, sizeof(struct cred));
         migrated->cache = cred_jar_privileged;
-        kmem_cache_free(cred->cache, cred);
+		if (cred->cache)
+        	kmem_cache_free(cred->cache, cred);
         return migrated;
     }
     return cred;
