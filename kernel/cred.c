@@ -37,6 +37,7 @@ static struct kmem_cache *cred_jar_privileged;  /* % for privileged*/
 /* % check if cred is privileged*/
 static bool cred_is_privileged(const struct cred *cred)
 {
+	pr_info("CRED: inside cred_is_privileged\n");
     /* privileged if: root uid/gid, or any effective/permitted caps set */
     if (uid_eq(cred->uid,  GLOBAL_ROOT_UID) ||
         uid_eq(cred->euid, GLOBAL_ROOT_UID) ||
@@ -48,6 +49,7 @@ static bool cred_is_privileged(const struct cred *cred)
         !cap_issubset(cred->cap_permitted,CAP_EMPTY_SET))
         return true;
 
+	pr_info("CRED: cred_is_privileged returning false\n");
     return false;
 }
 
@@ -292,7 +294,8 @@ struct cred *prepare_creds(void)
 
 	old = task->cred;
 	memcpy(new, old, sizeof(struct cred));
-
+	new->cache = cred_jar;
+	
 	new->non_rcu = 0;
 	atomic_set(&new->usage, 1);
 	set_cred_subscribers(new, 0);
@@ -468,8 +471,17 @@ int commit_creds(struct cred *new)
 	struct task_struct *task = current;
 	const struct cred *old = task->real_cred;
 
+	pr_info("CRED: commit_creds called: uid=%d euid=%d cache=%ps privileged=%d\n",
+            from_kuid(&init_user_ns, new->uid),
+            from_kuid(&init_user_ns, new->euid),
+            new->cache,
+            (int)cred_is_privileged(new));
+
+	pr_info("%d\n", (int)(new->cache != cred_jar_privileged));
+	pr_info("%d\n", (int)(cred_jar_privileged!=NULL));
 	/* % migrate the privileged cred to privileged cache with the below if */
 	if(cred_is_privileged(new) && new->cache != cred_jar_privileged && cred_jar_privileged!=NULL){
+		pr_info("CRED: migrating cred %p to privileged jar\n", new);
 		struct cred *migrated = kmem_cache_alloc(cred_jar_privileged, GFP_KERNEL);
 
 		if(!migrated){
@@ -583,7 +595,8 @@ EXPORT_SYMBOL(abort_creds);
 static struct cred *cred_migrate_if_needed(struct cred *cred)
 {
     if (cred_is_privileged(cred) && cred->cache != cred_jar_privileged) {
-        struct cred *migrated = kmem_cache_alloc(cred_jar_privileged,
+        pr_info("CRED: migrating cred %p to privileged jar\n", cred);
+		struct cred *migrated = kmem_cache_alloc(cred_jar_privileged,
                                                   GFP_KERNEL);
         if (!migrated)
             return NULL;
@@ -729,6 +742,9 @@ void __init cred_init(void)
 	/* % for privileged*/
 	cred_jar_privileged = kmem_cache_create("cred_jar_privileged", sizeof(struct cred), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT|SLAB_NO_MERGE, NULL);
+	
+	pr_info("CRED: cred_jar=%p cred_jar_privileged=%p\n",
+            cred_jar, cred_jar_privileged);
 }
 
 /**
