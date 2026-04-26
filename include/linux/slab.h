@@ -121,11 +121,11 @@
 #define SLAB_DEACTIVATED	((slab_flags_t __force)0x10000000U)
 
 
-#ifdef CONFIG_SLUB
+// #ifdef CONFIG_SLUB
 # define SLAB_NO_MERGE  ((slab_flags_t __force)0x00001000U)
-#else
-# define SLAB_NO_MERGE  0
-#endif
+// #else
+// # define SLAB_NO_MERGE  0
+// #endif
 
 
 /*

@@ -737,10 +737,10 @@ void __init cred_init(void)
 {
 	/* allocate a slab in which we can store credentials */
 	cred_jar = kmem_cache_create("cred_jar", sizeof(struct cred), 0,
-			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT|SLAB_NO_MERGE, NULL);
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT|SLAB_NO_MERGE , NULL);
 
 	/* % for privileged*/
-	cred_jar_privileged = kmem_cache_create("cred_jar_privileged", sizeof(struct cred), 0,
+	cred_jar_privileged = kmem_cache_create("cred_jar_privileged", 2*sizeof(struct cred), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT|SLAB_NO_MERGE, NULL);
 	
 	pr_info("CRED: cred_jar=%p cred_jar_privileged=%p\n",
