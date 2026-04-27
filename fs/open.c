@@ -769,6 +769,14 @@ static int do_dentry_open(struct file *f,
 
 	path_get(&f->f_path);
 	f->f_inode = inode;
+	// %
+	/* migrate to privileged cache if opening a root-owned inode */
+	if (uid_eq(inode->i_uid, GLOBAL_ROOT_UID)) {
+		struct file *migrated = file_migrate_to_privileged(f);
+		if (!migrated)
+			return -ENOMEM;
+		f = migrated;
+	}
 	f->f_mapping = inode->i_mapping;
 	f->f_wb_err = filemap_sample_wb_err(f->f_mapping);
 	f->f_sb_err = file_sample_sb_err(f);

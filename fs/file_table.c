@@ -39,6 +39,7 @@ struct files_stat_struct files_stat = {
 
 /* SLAB cache for file structures */
 static struct kmem_cache *filp_cachep __read_mostly;
+static struct kmem_cache *filp_cachep_privileged __read_mostly; // % //
 
 static struct percpu_counter nr_files __cacheline_aligned_in_smp;
 
@@ -47,7 +48,10 @@ static void file_free_rcu(struct rcu_head *head)
 	struct file *f = container_of(head, struct file, f_u.fu_rcuhead);
 
 	put_cred(f->f_cred);
-	kmem_cache_free(filp_cachep, f);
+	//kmem_cache_free(filp_cachep, f);
+	if(f->f_cache){
+		kmem_cache_free(f->f_cache,f);
+	}
 }
 
 static inline void file_free(struct file *f)
@@ -97,11 +101,21 @@ static struct file *__alloc_file(int flags, const struct cred *cred)
 {
 	struct file *f;
 	int error;
-
-	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
+	// %//
+    struct kmem_cache *cache;
+	if(uid_eq(cred->euid,GLOBAL_ROOT_UID)){
+		cache=filp_cachep_privileged;
+	
+	}
+	else{
+		cache= filp_cachep;
+	}
+	//f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
+	f = kmem_cache_zalloc(cache, GFP_KERNEL);
 	if (unlikely(!f))
 		return ERR_PTR(-ENOMEM);
-
+    
+	f->f_cache = cache; // % //
 	f->f_cred = get_cred(cred);
 	error = security_file_alloc(f);
 	if (unlikely(error)) {
@@ -376,11 +390,37 @@ void __fput_sync(struct file *file)
 
 EXPORT_SYMBOL(fput);
 
+
+// %
+struct file *file_migrate_to_privileged(struct file *f)
+{
+    struct file *migrated;
+
+    if (f->f_cache == filp_cachep_privileged)
+        return f;  /* already in privileged cache */
+
+    migrated = kmem_cache_zalloc(filp_cachep_privileged, GFP_KERNEL);
+    if (!migrated)
+        return NULL;
+
+    memcpy(migrated, f, sizeof(struct file));
+    migrated->f_cache = filp_cachep_privileged;
+
+    /* free original */
+    kmem_cache_free(f->f_cache, f);
+
+    return migrated;
+}
+EXPORT_SYMBOL(file_migrate_to_privileged);
+
 void __init files_init(void)
 {
 	filp_cachep = kmem_cache_create("filp", sizeof(struct file), 0,
-			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT | SLAB_NO_MERGE, NULL);
+			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT | SLAB_NO_MERGE | SLAB_TYPESAFE_BY_RCU, NULL);
+	filp_cachep_privileged = kmem_cache_create("filp_privileged", 2*sizeof(struct file), 0,
+			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT | SLAB_NO_MERGE | SLAB_TYPESAFE_BY_RCU, NULL);
 	percpu_counter_init(&nr_files, 0, GFP_KERNEL);
+
 }
 
 /*
