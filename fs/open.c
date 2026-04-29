@@ -771,12 +771,16 @@ static int do_dentry_open(struct file *f,
 	f->f_inode = inode;
 	// %
 	/* migrate to privileged cache if opening a root-owned inode */
-	if (uid_eq(inode->i_uid, GLOBAL_ROOT_UID)) {
-		struct file *migrated = file_migrate_to_privileged(f);
-		if (!migrated)
-			return -ENOMEM;
-		f = migrated;
-	}
+	// if (uid_eq(inode->i_uid, GLOBAL_ROOT_UID)) {
+	//  	// if (filp_cachep_privileged == NULL){
+	// 	// 	goto skip_migrate;
+	//  	// }
+	// 	struct file *migrated = file_migrate_to_privileged(f);
+	// 	if (!migrated)
+	//  		return -ENOMEM;
+	// 	f = migrated;
+	// }
+	// skip_migrate:
 	f->f_mapping = inode->i_mapping;
 	f->f_wb_err = filemap_sample_wb_err(f->f_mapping);
 	f->f_sb_err = file_sample_sb_err(f);
@@ -853,6 +857,14 @@ static int do_dentry_open(struct file *f,
 	 */
 	if ((f->f_mode & FMODE_WRITE) && filemap_nr_thps(inode->i_mapping))
 		truncate_pagecache(inode, 0);
+
+	// if (uid_eq(inode->i_uid, GLOBAL_ROOT_UID)){
+	// 	struct file *migrated = file_migrate_to_privileged(f);
+	// 	if (migrated){
+	// 		*f = * migrated;
+	// 		kmem_cache_free(filp_cachep_privileged,migrated);
+	// 	}
+	// }
 
 	return 0;
 

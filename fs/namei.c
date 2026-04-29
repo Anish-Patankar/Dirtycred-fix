@@ -3348,6 +3348,7 @@ static int do_o_path(struct nameidata *nd, unsigned flags, struct file *file)
 	return error;
 }
 
+extern struct file *alloc_file_privileged(void);
 static struct file *path_openat(struct nameidata *nd,
 			const struct open_flags *op, unsigned flags)
 {
@@ -3371,11 +3372,53 @@ static struct file *path_openat(struct nameidata *nd,
 			error = do_open(nd, file, op);
 		terminate_walk(nd);
 	}
+	// if (likely(!error)) {
+	// 	if (likely(file->f_mode & FMODE_OPENED))
+	// 		return file;
+	// 	WARN_ON(1);
+	// 	error = -EINVAL;
+	// }
+
 	if (likely(!error)) {
-		if (likely(file->f_mode & FMODE_OPENED))
-			return file;
-		WARN_ON(1);
-		error = -EINVAL;
+		if (likely(file->f_mode & FMODE_OPENED)) {
+
+			struct inode *inode = file->f_inode;
+
+			if (inode && uid_eq(inode->i_uid, GLOBAL_ROOT_UID)) {
+				struct file *new;
+
+				new = alloc_file_privileged();
+				if (!new) {
+					fput(file);
+					return ERR_PTR(-ENOMEM);
+				}
+
+				/* Copy state */
+				*new = *file;
+
+				/* Reinitialize locks */
+				spin_lock_init(&new->f_lock);
+				mutex_init(&new->f_pos_lock);
+				rwlock_init(&new->f_owner.lock);
+
+				/* Fix references */
+				if (new->f_op)
+					fops_get(new->f_op);
+
+				path_get(&new->f_path);
+
+				/* Drop old */
+				fput(file);
+
+				file = new;
+	        }
+
+        	return file;
+    	}
+
+    	/* IMPORTANT: keep this */
+    	WARN_ON(1);
+    	error = -EINVAL;
 	}
 	fput(file);
 	if (error == -EOPENSTALE) {

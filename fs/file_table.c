@@ -395,6 +395,9 @@ EXPORT_SYMBOL(fput);
 struct file *file_migrate_to_privileged(struct file *f)
 {
     struct file *migrated;
+	if (filp_cachep_privileged == NULL){
+		return f;
+	}
 
     if (f->f_cache == filp_cachep_privileged)
         return f;  /* already in privileged cache */
@@ -404,6 +407,11 @@ struct file *file_migrate_to_privileged(struct file *f)
         return NULL;
 
     memcpy(migrated, f, sizeof(struct file));
+	/* reinitialize fields that cannot be copied */
+	spin_lock_init(&migrated->f_lock);
+	mutex_init(&migrated->f_pos_lock);
+	rwlock_init(&migrated->f_owner.lock);
+	atomic_long_set(&migrated->f_count, atomic_long_read(&f->f_count));
     migrated->f_cache = filp_cachep_privileged;
 
     /* free original */
@@ -412,6 +420,16 @@ struct file *file_migrate_to_privileged(struct file *f)
     return migrated;
 }
 EXPORT_SYMBOL(file_migrate_to_privileged);
+
+void free_migrate_file(struct file *mig){
+	
+}
+
+struct file *alloc_file_privileged(void)
+{
+    return kmem_cache_alloc(filp_cachep_privileged, GFP_KERNEL);
+}
+EXPORT_SYMBOL(alloc_file_privileged);
 
 void __init files_init(void)
 {
